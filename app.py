@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import time
+import io
 import os
 
 # AssemblyAI API key (Use your actual key)
@@ -40,12 +41,14 @@ if uploaded_file and password == SECRET_KEY:
                 st.error("Failed to upload file.")
                 st.stop()
 
-        with st.spinner("Requesting transcription..."):
-            response = requests.post(
-                TRANSCRIPT_URL,
-                headers=headers,
-                json={"audio_url": audio_url, "speaker_labels": True},
-            )
+        with st.spinner("Requesting transcription..."):           
+            # Convert Streamlit file uploader object into a file-like object
+            file_bytes = io.BytesIO(uploaded_file.getvalue())
+            files = {"file": (uploaded_file.name, file_bytes, uploaded_file.type)}
+            
+            # Upload to AssemblyAI
+            response = requests.post(UPLOAD_URL, headers=HEADERS, files=files)
+
             if response.status_code == 200:
                 transcript_id = response.json()["id"]
                 st.success(f"Transcription request sent (ID: {transcript_id})")
