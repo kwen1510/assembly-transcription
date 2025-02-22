@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import time
+import tempfile
 import os
 
 # AssemblyAI API key and secret key
@@ -18,7 +19,7 @@ st.title("🎙️ Audio Transcription with AssemblyAI")
 st.markdown("Upload an audio file and get a transcription.")
 
 # Password field
-password = st.text_input("Enter the password", type="password")
+password = st.text_input("Enter the password", type="password", key="password")
 
 # File uploader
 uploaded_file = st.file_uploader("Upload Audio", type=["mp3", "wav", "m4a", "mp4"])
@@ -27,56 +28,80 @@ if uploaded_file and password == SECRET_KEY:
     st.audio(uploaded_file)
 
     if st.button("Transcribe Audio"):
-        with st.spinner("Processing..."):
-            # Save the uploaded file locally
-            file_path = os.path.join("tempDir", uploaded_file.name)
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+        with st.spinner("Saving file..."):
+            # Save the uploaded file to a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as temp_file:
+                temp_file.write(uploaded_file.getvalue())
+                temp_file_path = temp_file.name  # Get the temporary file path
 
-            # Upload the file to AssemblyAI
-            with open(file_path, "rb") as f:
+            st.success(f"✅ File saved: {temp_file_path}")
+
+        with st.spinner("Uploading file..."):
+            with open(temp_file_path, "rb") as f:
                 response = requests.post(UPLOAD_URL, headers=headers, files={"file": f})
 
             if response.status_code == 200:
                 audio_url = response.json()["upload_url"]
-                st.success("File uploaded successfully.")
+                st.success("✅ File uploaded successfully.")
+            else:
+                st.error("❌ Failed to upload file.")
+                os.remove(temp_file_path)  # Delete temp file
+                st.stop()
 
-                # Request transcription
-                response = requests.post(
-                    TRANSCRIPT_URL,
-                    headers=headers,
-                    json={"audio_url": audio_url, "speaker_labels": True},
+        with st.spinner("Requesting transcription..."):
+            response = requests.post(
+                TRANSCRIPT_URL,
+                headers=headers,
+                json={"audio_url": audio_url, "speaker_labels": True},
+            )
+
+            if response.status_code == 200:
+                transcript_id = response.json()["id"]
+                st.success(f"📋 Transcription request sent (ID: {transcript_id})")
+            else:
+                st.error("❌ Failed to request transcription.")
+                os.remove(temp_file_path)  # Delete temp file
+                st.stop()
+
+        # Polling for transcript completion
+        st.write("⏳ Transcription in progress...")
+        status = "queued"
+        while status not in ["completed", "failed"]:
+            time.sleep(5)
+            response = requests.get(f"{TRANSCRIPT_URL}/{transcript_id}", headers=headers)
+            transcript_data = response.json()
+            status = transcript_data["status"]
+
+            if status == "completed":
+                transcript_text = transcript_data["text"]
+                utterances = transcript_data.get("utterances", [])
+
+                st.subheader("🔊 Transcription Result:")
+                st.write(transcript_text)
+
+                # Show speaker labels if available
+                if utterances:
+                    st.subheader("🗣️ Speaker Breakdown:")
+                    for utterance in utterances:
+                        st.write(f"**Speaker {utterance['speaker']}**: {utterance['text']}")
+
+                # Provide transcript download button
+                st.download_button(
+                    label="📥 Download Transcript",
+                    data=transcript_text,
+                    file_name="transcript.txt",
+                    mime="text/plain",
                 )
 
-                if response.status_code == 200:
-                    transcript_id = response.json()["id"]
-                    st.success(f"Transcription requested (ID: {transcript_id})")
+                st.success("✅ Transcription Completed!")
 
-                    # Polling for transcription completion
-                    status = "queued"
-                    while status not in ["completed", "failed"]:
-                        time.sleep(5)
-                        response = requests.get(f"{TRANSCRIPT_URL}/{transcript_id}", headers=headers)
-                        status = response.json()["status"]
+            elif status == "failed":
+                st.error("❌ Transcription failed.")
+                break
 
-                    if status == "completed":
-                        transcript_text = response.json()["text"]
-                        st.subheader("Transcription Result:")
-                        st.write(transcript_text)
-
-                        # Provide download link
-                        st.download_button(
-                            label="Download Transcript",
-                            data=transcript_text,
-                            file_name="transcript.txt",
-                            mime="text/plain",
-                        )
-                    else:
-                        st.error("Transcription failed.")
-                else:
-                    st.error("Failed to request transcription.")
             else:
-                st.error("Failed to upload file.")
+                st.write("⏳ Processing... Please wait.")
 
-            # Delete the local file
-            os.remove(file_path)
+        # Delete the temporary file after processing
+        os.remove(temp_file_path)
+        st.write(f"🗑️ Deleted temporary file: {temp_file_path}")
