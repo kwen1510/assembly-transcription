@@ -16,7 +16,7 @@ password = st.text_input("Enter the application password", type="password")
 
 if password == st.secrets["SECRET_KEY"]:
     # File uploader
-    uploaded_file = st.file_uploader("Upload Audio File", type=["mp3", "wav", "m4a", "mp4"])
+    uploaded_file = st.file_uploader("Upload Audio File", type=["mp3", "wav", "m4a", "mp4", "mov"])
 
     # Select transcription mode
     mode = st.radio(
