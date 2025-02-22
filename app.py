@@ -26,21 +26,29 @@ uploaded_file = st.file_uploader("Upload Audio", type=["mp3", "wav", "m4a", "mp4
 
 if uploaded_file and password == SECRET_KEY:
     st.audio(uploaded_file, format="audio/mp3")
-    
-    if st.button("Transcribe Audio"):
-        with st.spinner("Uploading file..."):
-            # Convert uploaded file into a file-like object
-            file_bytes = io.BytesIO(uploaded_file.getvalue())
-            files = {"file": (uploaded_file.name, file_bytes, uploaded_file.type)}
 
-            # Upload file to AssemblyAI
-            response = requests.post(UPLOAD_URL, headers=headers, files=files)
+    if st.button("Transcribe Audio"):
+        with st.spinner("Saving file..."):
+            # Save the uploaded file locally
+            temp_dir = "temp_audio"
+            os.makedirs(temp_dir, exist_ok=True)
+
+            file_path = os.path.join(temp_dir, uploaded_file.name)
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getvalue())
+
+            st.success(f"✅ File saved: {file_path}")
+
+        with st.spinner("Uploading file..."):
+            with open(file_path, "rb") as f:
+                response = requests.post(UPLOAD_URL, headers=headers, files={"file": f})
 
             if response.status_code == 200:
                 audio_url = response.json()["upload_url"]
                 st.success("✅ File uploaded successfully.")
             else:
                 st.error("❌ Failed to upload file.")
+                os.remove(file_path)  # Clean up file
                 st.stop()
 
         with st.spinner("Requesting transcription..."):
@@ -55,6 +63,7 @@ if uploaded_file and password == SECRET_KEY:
                 st.success(f"📋 Transcription request sent (ID: {transcript_id})")
             else:
                 st.error("❌ Failed to request transcription.")
+                os.remove(file_path)  # Clean up file
                 st.stop()
 
         # Polling for transcript completion
@@ -96,3 +105,7 @@ if uploaded_file and password == SECRET_KEY:
 
             else:
                 st.write("⏳ Processing... Please wait.")
+
+        # Delete local file after processing
+        os.remove(file_path)
+        st.write(f"🗑️ Deleted local file: {file_path}")
