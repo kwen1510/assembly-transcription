@@ -1,112 +1,62 @@
 import streamlit as st
-import requests
+from transcribe import upload_file, transcribe_audio, poll_transcription
 import time
-import tempfile
-import os
-import zipfile
+from zipfile import ZipFile
 from io import BytesIO
 
-# AssemblyAI API key and secret key
-API_KEY = st.secrets["ASSEMBLY_AI_API"]
-SECRET_KEY = st.secrets["SECRET_KEY"]
+# Load secrets
+SECRET_KEY = st.secrets["general"]["SECRET_KEY"]
+ASSEMBLY_AI_API = st.secrets["general"]["ASSEMBLY_AI_API"]
 
-# AssemblyAI endpoints
-UPLOAD_URL = "https://api.assemblyai.com/v2/upload"
-TRANSCRIPT_URL = "https://api.assemblyai.com/v2/transcript"
+# App header
+st.header("Transcription Tool")
+st.subheader("Generate transcriptions with AssemblyAI. You have 3 hours of free conversion per month.")
 
-headers = {"authorization": API_KEY}
+# Password input
+password = st.text_input("Enter the application password", type="password")
 
-# Streamlit UI
-st.title("🎬 Subtitling Tool")
-st.subheader("Generate subtitles with AssemblyAI. You are given 3 hours of free conversion per month.")
+if password == SECRET_KEY:
+    # File uploader
+    uploaded_files = st.file_uploader("Please upload your audio files", accept_multiple_files=True, type=['mp3', 'wav', 'm4a'])
 
-# Password field
-password = st.text_input("🔑 Enter your password", type="password", key="password")
+    if uploaded_files:
+        # Create an in-memory ZIP file
+        zip_buffer = BytesIO()
+        with ZipFile(zip_buffer, "w") as zf:
+            for uploaded_file in uploaded_files:
+                # Upload file to AssemblyAI
+                upload_url = upload_file(uploaded_file, ASSEMBLY_AI_API)
+                
+                # Initiate transcription
+                transcription_id = transcribe_audio(upload_url, ASSEMBLY_AI_API)
+                
+                # Poll for transcription completion
+                st.write(f"Transcribing {uploaded_file.name}...")
+                progress_bar = st.progress(0)
+                while True:
+                    transcription_result = poll_transcription(transcription_id, ASSEMBLY_AI_API)
+                    if transcription_result['status'] == 'completed':
+                        break
+                    elif transcription_result['status'] == 'failed':
+                        st.error(f"Transcription failed for {uploaded_file.name}.")
+                        break
+                    time.sleep(5)
+                    progress_bar.progress(min(progress_bar.progress + 10, 100))
+                
+                if transcription_result['status'] == 'completed':
+                    # Save transcription to ZIP
+                    transcription_text = transcription_result['text']
+                    file_name = uploaded_file.name.rsplit('.', 1)[0] + '.txt'
+                    zf.writestr(file_name, transcription_text)
+                    st.success(f"Transcription for {uploaded_file.name} completed.")
 
-# File uploader (Multiple files)
-fileObjects = st.file_uploader("📂 Please upload your file(s)", accept_multiple_files=True)
-
-if fileObjects and password == SECRET_KEY:
-    # Create a ZIP buffer
-    zip_buffer = BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-
-        for fileObject in fileObjects:
-            st.write(f"📤 Uploading: {fileObject.name}")
-
-            # Save file to a temporary location
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{fileObject.name.split('.')[-1]}") as temp_file:
-                temp_file.write(fileObject.getvalue())
-                temp_file_path = temp_file.name  # Store temp file path
-
-            # Upload to AssemblyAI
-            with open(temp_file_path, "rb") as f:
-                response = requests.post(UPLOAD_URL, headers=headers, files={"file": f})
-
-            # Delete temp file after upload
-            os.remove(temp_file_path)
-
-            if response.status_code != 200:
-                st.error(f"❌ Failed to upload {fileObject.name}")
-                continue
-
-            audio_url = response.json()["upload_url"]
-            st.success(f"✅ Uploaded: {fileObject.name}")
-
-            # Request transcription
-            payload = {"audio_url": audio_url, "speaker_labels": True, "format_text": True}
-            response = requests.post(TRANSCRIPT_URL, headers=headers, json=payload)
-
-            if response.status_code != 200:
-                st.error(f"❌ Failed to request transcription for {fileObject.name}")
-                continue
-
-            transcript_id = response.json()["id"]
-            st.write(f"⏳ Transcription in progress for {fileObject.name}")
-
-            # Polling for transcript completion
-            result = {}
-            sleep_duration = 1
-            percent_complete = 0
-            progress_bar = st.progress(percent_complete)
-            st.text("Currently in queue")
-
-            while result.get("status") != "processing":
-                percent_complete += sleep_duration
-                time.sleep(sleep_duration)
-                progress_bar.progress(percent_complete / 10)
-                response = requests.get(f"{TRANSCRIPT_URL}/{transcript_id}", headers=headers)
-                result = response.json()
-
-            sleep_duration = 0.01
-            for percent in range(percent_complete, 101):
-                time.sleep(sleep_duration)
-                progress_bar.progress(percent)
-
-            with st.spinner("Processing..."):
-                while result.get("status") != 'completed':
-                    time.sleep(2)
-                    response = requests.get(f"{TRANSCRIPT_URL}/{transcript_id}", headers=headers)
-                    result = response.json()
-
-            # Extract transcript text
-            transcript_text = result.get("text", "")
-            if not transcript_text:
-                st.error(f"❌ No transcript generated for {fileObject.name}")
-                continue
-
-            # Convert transcript to SRT format
-            srt_text = "\n".join([f"{i}\n00:00:0{i//2},000 --> 00:00:0{i//2 + 1},000\n{line}"
-                                  for i, line in enumerate(transcript_text.split('. '), 1)])
-
-            file_name = fileObject.name.split('.')[0] + ".srt"
-            st.write(f"✅ Subtitle file for {file_name} created")
-
-            # Write subtitle into ZIP file
-            zf.writestr(file_name, srt_text)
-
-    # Provide ZIP download button
-    zip_buffer.seek(0)
-    st.download_button("📥 Download All Subtitles", zip_buffer, "subtitles.zip", "application/zip")
-
-    st.success("🎉 All subtitles created!")
+        # Provide download of ZIP file
+        zip_buffer.seek(0)
+        st.download_button(
+            label="Download All Transcriptions",
+            data=zip_buffer,
+            file_name="transcriptions.zip",
+            mime="application/zip"
+        )
+else:
+    st.error("Incorrect password. Please try again.")
