@@ -1,60 +1,55 @@
 import streamlit as st
-from transcribe import upload_file, get_transcription_result, write_srt
-from io import BytesIO
-from zipfile import ZipFile
-import time
+import assemblyai as aai
 
-# Load secrets
-SECRET_KEY = st.secrets["general"]["SECRET_KEY"]
-ASSEMBLY_AI_API = st.secrets["general"]["ASSEMBLY_AI_API"]
+# Load API key from Streamlit secrets
+aai.settings.api_key = st.secrets["ASSEMBLY_AI_API"]
 
-# App header
-st.header("Transcription Tool with Speaker Diarization")
-st.subheader("Generate transcriptions with speaker labels using AssemblyAI.")
+# Initialize the transcriber
+transcriber = aai.Transcriber()
+
+# Streamlit app
+st.title("AssemblyAI Transcription App")
 
 # Password input
 password = st.text_input("Enter the application password", type="password")
 
-if password == SECRET_KEY:
+if password == st.secrets["SECRET_KEY"]:
     # File uploader
-    uploaded_files = st.file_uploader("Upload your audio files", accept_multiple_files=True, type=['mp3', 'wav', 'm4a'])
+    uploaded_file = st.file_uploader("Upload Audio File", type=["mp3", "wav", "m4a"])
 
-    # Optional: Number of speakers
-    speakers_expected = st.number_input("Expected number of speakers (optional)", min_value=1, step=1, value=2)
-
-    if uploaded_files:
-        # Create an in-memory ZIP file
-        zip_buffer = BytesIO()
-        with ZipFile(zip_buffer, "w") as zf:
-            for uploaded_file in uploaded_files:
-                # Upload file and initiate transcription
-                st.write(f"Processing {uploaded_file.name}...")
-                transcribe_id = upload_file(uploaded_file, ASSEMBLY_AI_API, speakers_expected)
-
-                # Poll for transcription completion
-                progress_bar = st.progress(0)
-                while True:
-                    result = get_transcription_result(ASSEMBLY_AI_API, transcribe_id)
-                    if result['status'] == 'completed':
-                        break
-                    time.sleep(5)
-                    progress_bar.progress(min(progress_bar.progress + 10, 100))
-
-                # Retrieve SRT content
-                srt_content = write_srt(ASSEMBLY_AI_API, transcribe_id)
-
-                # Save SRT to ZIP
-                file_name = uploaded_file.name.rsplit('.', 1)[0] + '.srt'
-                zf.writestr(file_name, srt_content)
-                st.success(f"Transcription for {uploaded_file.name} completed.")
-
-        # Provide download of ZIP file
-        zip_buffer.seek(0)
-        st.download_button(
-            label="Download All Transcriptions",
-            data=zip_buffer,
-            file_name="transcriptions.zip",
-            mime="application/zip"
+    if uploaded_file is not None:
+        # Select transcription mode
+        mode = st.radio(
+            "Select Transcription Mode",
+            ("Standard Transcription", "Transcription with Speaker Diarization")
         )
+
+        # Transcription configuration
+        if mode == "Transcription with Speaker Diarization":
+            config = aai.TranscriptionConfig(speaker_labels=True)
+        else:
+            config = aai.TranscriptionConfig()
+
+        # Transcribe the uploaded audio file
+        with st.spinner("Transcribing..."):
+            transcript = transcriber.transcribe(uploaded_file, config)
+
+        # Check for errors
+        if transcript.status == aai.TranscriptStatus.error:
+            st.error(f"Transcription failed: {transcript.error}")
+        else:
+            # Display the transcribed text
+            st.header("Transcription")
+            st.write(transcript.text)
+
+            # If speaker labels are enabled, display utterances
+            if mode == "Transcription with Speaker Diarization":
+                st.header("Speaker Diarization")
+                for utterance in transcript.utterances:
+                    speaker = utterance.speaker
+                    start_time = utterance.start / 1000  # Convert to seconds
+                    end_time = utterance.end / 1000      # Convert to seconds
+                    text = utterance.text
+                    st.write(f"**Speaker {speaker} [{start_time:.2f}s - {end_time:.2f}s]:** {text}")
 else:
     st.error("Incorrect password. Please try again.")
