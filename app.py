@@ -1,103 +1,113 @@
 import streamlit as st
-import time
-import zipfile
-from io import BytesIO
-import tempfile
 import requests
+import time
+import tempfile
+import os
 
-# AssemblyAI API endpoints
+# AssemblyAI API key and secret key
+API_KEY = st.secrets["ASSEMBLY_AI_API"]
+SECRET_KEY = st.secrets["SECRET_KEY"]
+
+# AssemblyAI endpoints
 UPLOAD_URL = "https://api.assemblyai.com/v2/upload"
 TRANSCRIPT_URL = "https://api.assemblyai.com/v2/transcript"
 
-st.header("🎬 Subtitling Tool")
-st.subheader("Generate your subtitles with AssemblyAI. You are given 3 hours of free conversion per month.")
+headers = {"authorization": API_KEY}
 
-api_key = st.text_input("🔑 Enter your AssemblyAI API key", type="password")
+# Streamlit UI
+st.title("🎙️ Audio Transcription with AssemblyAI")
+st.markdown("Upload an audio file and get a transcription.")
 
-fileObjects = st.file_uploader("📂 Upload your files", accept_multiple_files=True)
+# Password field
+password = st.text_input("Enter the password", type="password", key="password")
 
-if fileObjects and api_key:
-    # Create a ZIP buffer
-    zip_buffer = BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+# File uploader
+uploaded_file = st.file_uploader("Upload Audio", type=["mp3", "wav", "m4a", "mp4"])
 
-        for fileObject in fileObjects:
-            # Save uploaded file to a temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{fileObject.name.split('.')[-1]}") as temp_file:
-                temp_file.write(fileObject.getvalue())
+if uploaded_file and password == SECRET_KEY:
+    st.audio(uploaded_file)
+
+    if st.button("Transcribe Audio"):
+        with st.spinner("Saving file..."):
+            # Save the uploaded file properly
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as temp_file:
+                temp_file.write(uploaded_file.getvalue())
                 temp_file_path = temp_file.name  # Store the temp file path
 
-            st.write(f"📤 Uploading: {fileObject.name}")
+            st.success(f"✅ File saved: {temp_file_path}")
 
-            # Upload to AssemblyAI
-            with open(temp_file_path, "rb") as f:
-                headers = {"authorization": api_key}
-                response = requests.post(UPLOAD_URL, headers=headers, files={"file": f})
+        with st.spinner("Uploading file..."):
+            try:
+                with open(temp_file_path, "rb") as f:
+                    files = {"file": (uploaded_file.name, f, uploaded_file.type)}  # Correct format
+                    response = requests.post(UPLOAD_URL, headers=headers, files=files)
 
-            if response.status_code != 200:
-                st.error(f"❌ Failed to upload {fileObject.name}")
-                continue
+                if response.status_code == 200:
+                    audio_url = response.json()["upload_url"]
+                    st.success("✅ File uploaded successfully.")
+                else:
+                    st.error(f"❌ Failed to upload file. Error: {response.text}")
+                    os.remove(temp_file_path)  # Delete temp file
+                    st.stop()
+            except Exception as e:
+                st.error(f"❌ An error occurred during upload: {e}")
+                os.remove(temp_file_path)  # Clean up
+                st.stop()
 
-            audio_url = response.json()["upload_url"]
-            st.success(f"✅ Uploaded: {fileObject.name}")
+        with st.spinner("Requesting transcription..."):
+            response = requests.post(
+                TRANSCRIPT_URL,
+                headers=headers,
+                json={"audio_url": audio_url, "speaker_labels": True},
+            )
 
-            # Request transcription
-            payload = {"audio_url": audio_url, "speaker_labels": True, "format_text": True}
-            response = requests.post(TRANSCRIPT_URL, headers=headers, json=payload)
+            if response.status_code == 200:
+                transcript_id = response.json()["id"]
+                st.success(f"📋 Transcription request sent (ID: {transcript_id})")
+            else:
+                st.error(f"❌ Failed to request transcription. Error: {response.text}")
+                os.remove(temp_file_path)  # Clean up
+                st.stop()
 
-            if response.status_code != 200:
-                st.error(f"❌ Failed to request transcription for {fileObject.name}")
-                continue
+        # Polling for transcript completion
+        st.write("⏳ Transcription in progress...")
+        status = "queued"
+        while status not in ["completed", "failed"]:
+            time.sleep(5)
+            response = requests.get(f"{TRANSCRIPT_URL}/{transcript_id}", headers=headers)
+            transcript_data = response.json()
+            status = transcript_data["status"]
 
-            transcript_id = response.json()["id"]
-            st.write(f"⏳ Transcription in progress for {fileObject.name}")
+            if status == "completed":
+                transcript_text = transcript_data["text"]
+                utterances = transcript_data.get("utterances", [])
 
-            # Polling for transcript completion
-            sleep_duration = 1
-            percent_complete = 0
-            progress_bar = st.progress(percent_complete)
-            st.text("Currently in queue")
+                st.subheader("🔊 Transcription Result:")
+                st.write(transcript_text)
 
-            result = {}
-            while result.get("status") != "processing":
-                percent_complete += sleep_duration
-                time.sleep(sleep_duration)
-                progress_bar.progress(percent_complete / 10)
-                response = requests.get(f"{TRANSCRIPT_URL}/{transcript_id}", headers=headers)
-                result = response.json()
+                # Show speaker labels if available
+                if utterances:
+                    st.subheader("🗣️ Speaker Breakdown:")
+                    for utterance in utterances:
+                        st.write(f"**Speaker {utterance['speaker']}**: {utterance['text']}")
 
-            sleep_duration = 0.01
-            for percent in range(percent_complete, 101):
-                time.sleep(sleep_duration)
-                progress_bar.progress(percent)
+                # Provide transcript download button
+                st.download_button(
+                    label="📥 Download Transcript",
+                    data=transcript_text,
+                    file_name="transcript.txt",
+                    mime="text/plain",
+                )
 
-            with st.spinner("Processing..."):
-                while result.get("status") != 'completed':
-                    time.sleep(2)
-                    response = requests.get(f"{TRANSCRIPT_URL}/{transcript_id}", headers=headers)
-                    result = response.json()
+                st.success("✅ Transcription Completed!")
 
-            # Extract transcript text
-            transcript_text = result.get("text", "")
-            if not transcript_text:
-                st.error(f"❌ No transcript generated for {fileObject.name}")
-                continue
+            elif status == "failed":
+                st.error("❌ Transcription failed.")
+                break
 
-            # Convert transcript to SRT format
-            srt_text = "\n".join([f"{i}\n00:00:0{i//2},000 --> 00:00:0{i//2 + 1},000\n{line}"
-                                  for i, line in enumerate(transcript_text.split('. '), 1)])
+            else:
+                st.write("⏳ Processing... Please wait.")
 
-            file_name = fileObject.name.split('.')[0] + ".srt"
-            st.write(f"✅ Subtitle file for {file_name} created")
-
-            # Write subtitle into ZIP file
-            zf.writestr(file_name, srt_text)
-
-            # Delete temp file after processing
-            os.remove(temp_file_path)
-
-    # Provide ZIP download button
-    zip_buffer.seek(0)
-    st.download_button("📥 Download All Subtitles", zip_buffer, "subtitles.zip", "application/zip")
-
-    st.success("🎉 All subtitles created!")
+        # Delete the temporary file after processing
+        os.remove(temp_file_path)
+        st.write(f"🗑️ Deleted temporary file: {temp_file_path}")
