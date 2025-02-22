@@ -5,6 +5,7 @@ import os
 
 # AssemblyAI API key (Use your actual key)
 API_KEY = st.secrets["ASSEMBLY_AI_API"]
+SECRET_KEY = st.secrets["SECRET_KEY"]
 
 # AssemblyAI endpoints
 UPLOAD_URL = "https://api.assemblyai.com/v2/upload"
@@ -16,10 +17,13 @@ headers = {"authorization": API_KEY}
 st.title("🎙️ Audio Transcription with AssemblyAI")
 st.markdown("Upload an audio file and get a transcription.")
 
+# Password field
+password = st.text_input("Enter a password", type="password")
+
 # File uploader
 uploaded_file = st.file_uploader("Upload Audio", type=["mp3", "wav", "m4a", "mp4"])
 
-if uploaded_file:
+if uploaded_file and password == SECRET_KEY:
     st.audio(uploaded_file, format="audio/mp3")
     
     if st.button("Transcribe Audio"):
