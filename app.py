@@ -29,47 +29,47 @@ if uploaded_file and password == SECRET_KEY:
     
     if st.button("Transcribe Audio"):
         with st.spinner("Uploading file..."):
-            response = requests.post(
-                UPLOAD_URL,
-                headers=headers,
-                files={"file": uploaded_file.getvalue()},
-            )
-            if response.status_code == 200:
-                audio_url = response.json()["upload_url"]
-                st.success("File uploaded successfully.")
-            else:
-                st.error("Failed to upload file.")
-                st.stop()
-
-        with st.spinner("Requesting transcription..."):           
-            # Convert Streamlit file uploader object into a file-like object
+            # Convert uploaded file into a file-like object
             file_bytes = io.BytesIO(uploaded_file.getvalue())
             files = {"file": (uploaded_file.name, file_bytes, uploaded_file.type)}
-            
-            # Upload to AssemblyAI
-            response = requests.post(UPLOAD_URL, headers=HEADERS, files=files)
+
+            # Upload file to AssemblyAI
+            response = requests.post(UPLOAD_URL, headers=headers, files=files)
+
+            if response.status_code == 200:
+                audio_url = response.json()["upload_url"]
+                st.success("✅ File uploaded successfully.")
+            else:
+                st.error("❌ Failed to upload file.")
+                st.stop()
+
+        with st.spinner("Requesting transcription..."):
+            response = requests.post(
+                TRANSCRIPT_URL,
+                headers=headers,
+                json={"audio_url": audio_url, "speaker_labels": True},
+            )
 
             if response.status_code == 200:
                 transcript_id = response.json()["id"]
-                st.success(f"Transcription request sent (ID: {transcript_id})")
+                st.success(f"📋 Transcription request sent (ID: {transcript_id})")
             else:
-                st.error("Failed to request transcription.")
+                st.error("❌ Failed to request transcription.")
                 st.stop()
 
         # Polling for transcript completion
-        st.write("Transcription in progress...")
+        st.write("⏳ Transcription in progress...")
         status = "queued"
         while status not in ["completed", "failed"]:
             time.sleep(5)  # Wait before polling again
-            response = requests.get(
-                f"{TRANSCRIPT_URL}/{transcript_id}", headers=headers
-            )
-            status = response.json()["status"]
+            response = requests.get(f"{TRANSCRIPT_URL}/{transcript_id}", headers=headers)
+            transcript_data = response.json()
+            status = transcript_data["status"]
 
             if status == "completed":
-                transcript_text = response.json()["text"]
-                utterances = response.json().get("utterances", [])
-                
+                transcript_text = transcript_data["text"]
+                utterances = transcript_data.get("utterances", [])
+
                 st.subheader("🔊 Transcription Result:")
                 st.write(transcript_text)
 
@@ -85,16 +85,14 @@ if uploaded_file and password == SECRET_KEY:
                     f.write(transcript_text)
 
                 with open(transcript_file, "rb") as f:
-                    st.download_button(
-                        "Download Transcript", f, file_name="transcript.txt"
-                    )
-                    
+                    st.download_button("📥 Download Transcript", f, file_name="transcript.txt")
+
                 os.remove(transcript_file)
+                st.success("✅ Transcription Completed!")
 
             elif status == "failed":
-                st.error("Transcription failed.")
+                st.error("❌ Transcription failed.")
                 break
 
             else:
-                st.write("Processing... Please wait.")
-
+                st.write("⏳ Processing... Please wait.")
